@@ -1,0 +1,12 @@
+{
+    "role": "mentee",
+    "email": "first.last@microsoft.com",
+    "objectives": [
+        "career growth",
+        "technical expertise"
+    ],
+    "detail": "user-provided open-ended description",
+    "title": "Senior Software Engineer",
+    "capacity": 1,
+    "org": "manager or skip manager (TBD)"
+}
