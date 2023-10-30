@@ -1,3 +1,4 @@
+from io import StringIO
 import logging
 import math
 import sys
@@ -10,6 +11,7 @@ import math
 
 # Constants
 BATCH_SIZE = 12
+PARTICIPANTS_FILE = "responses_20_batching.xlsx"
 
 # Set up OpenAI API key
 openai.api_type = "azure"
@@ -69,7 +71,15 @@ def setup_logger():
 # Retrieve mentor/mentee data
 def retrieve_data():
     # Read in survey responses CSV files
-    participants_df = pd.read_excel("responses_20_batching.xlsx")
+    participants_df = pd.read_excel(PARTICIPANTS_FILE)
+
+    #Define schema to avoid warnings
+    participants_df['title'] = pd.NA
+    participants_df['title'] = participants_df['title'].astype('string')
+    participants_df['skip_manager'] = pd.NA
+    participants_df['skip_manager'] = participants_df['skip_manager'].astype('string')
+    participants_df['manager'] = pd.NA
+    participants_df['manager'] = participants_df['manager'].astype('string')
 
     return participants_df
 
@@ -177,7 +187,7 @@ def match_with_gpt(inputdata):
 
     return completion["choices"][0]["message"]["content"]
 
-def postprocess_data(matches_df, unmatched_mentees_df):
+def postprocess_data(matches_df, unmatched_mentees_df, unmatched_mentors_df):
     logging.info(f"matches: {matches_df}")
     # Delete matches file
     if os.path.isfile("matches.xlsx"):
@@ -186,6 +196,7 @@ def postprocess_data(matches_df, unmatched_mentees_df):
     writer = pd.ExcelWriter('matches.xlsx', engine='xlsxwriter')
     matches_df.to_excel(writer, sheet_name='matched', index=False)
     unmatched_mentees_df.to_excel(writer, sheet_name='unmatched_mentees', index=False)
+    unmatched_mentors_df.to_excel(writer, sheet_name='unmatched_mentors', index=False)
     writer.close()
 
 if __name__ == '__main__':
@@ -221,7 +232,7 @@ if __name__ == '__main__':
 
         # Send to gpt model 
         matches = match_with_gpt(batch.to_json())
-        matches_df = pd.read_json(matches)
+        matches_df = pd.read_json(StringIO(matches))
         
         if not is_last_batch:
             # valid_matches = matches_df[(matches_df['alignment_score'] != '') & (matches_df['alignment_score'] > 6)]
@@ -247,8 +258,7 @@ if __name__ == '__main__':
             logging.info(f"Missing participants to complete the matching. Mentees: {len(mentees_df)}, Mentors {len(mentors_df)}")
             break
 
-
     unmatched_mentees_df = update_unmatched_mentees(mentees_df, result_df)
         
-    postprocess_data(result_df, unmatched_mentees_df)
+    postprocess_data(result_df, unmatched_mentees_df, mentors_df)
     logging.info("Finished")
