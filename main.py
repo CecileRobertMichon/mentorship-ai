@@ -11,7 +11,7 @@ import math
 
 # Constants
 BATCH_SIZE = 12
-PARTICIPANTS_FILE = "responses_20_batching.xlsx"
+PARTICIPANTS_FILE = "responses_20.xlsx"
 
 # Set up OpenAI API key
 openai.api_type = "azure"
@@ -26,6 +26,7 @@ system_message = '''
     - Mentors and mentees should have a different manager. A mentee should also not be matched with their manager.
     - Mentors should be at least one level above mentees (as specified in the "title" field). 
     - Create pairs based on common goals or interests as defined by the objectives and details properties.
+    - Try to pair mentors and mentees that are in the same time zone or time zones 4 or fewer hours apart (as specified in the "time_zone" field).
 
     Provide a reason/description for why you suggested each pairing as well as a reason why the match might not be ideal.
     Provide a rating out of 10 on how close the mentor's and mentee's preferences are aligned. 
@@ -39,7 +40,7 @@ system_message = '''
             "reason_for": "Reason why Mentor was paired with Mentee",
             "reason_against":"Any reasons why this might not be a good match",
             "alignment_score": "score out of 10. This must be an integer.",
-            "over_capacity": "true" if mentor is over their capacity. "false" if mentor is at or below capacity e.g. mentor with capacity of 2 can be paired with 2 mentees so over_capacity would equal "false",
+            "over_capacity": "true" if mentor is over their capacity. "false" if mentor is at or below capacity e.g. mentor with capacity of 2 can be paired with 2 mentees so over_capacity would equal "false"
         },
         {
             ...
@@ -80,7 +81,7 @@ def retrieve_data():
     participants_df['skip_manager'] = participants_df['skip_manager'].astype('string')
     participants_df['manager'] = pd.NA
     participants_df['manager'] = participants_df['manager'].astype('string')
-
+    
     return participants_df
 
 # Process the data so it can be sent to GPT, ideally into JSON structure.
@@ -97,6 +98,9 @@ def preprocess_data(participants_df):
 
     for index, participant in participants_df.iterrows():
         alias = participant["Email"]
+        timezone = participant["time_zone"]
+
+        logging.info(f"Timezone for {alias} is {timezone}")
 
         # Use Microsoft Graph API to get manager
         response = requests.get(f"https://graph.microsoft.com/v1.0/users/{alias}/manager", headers=headers)
@@ -163,6 +167,28 @@ def update_mentees(mentees_df, matches):
 
     return mentees_df
 
+# Get input data information on each of the matches
+def update_inputdata(matches_df, inputdata):
+    logging.info(f"Starting to update inputdata")
+    for i, match in matches_df.iterrows():
+        logging.info(f"Looking at match {match['mentor']}/{match['mentee']}")
+        mentee = inputdata[(inputdata['Email'] == match['mentee']) & (inputdata['role'] == 'Mentee')]
+        mentor = inputdata[(inputdata['Email'] == match['mentor']) & (inputdata['role'] == 'Mentor')]
+        logging.info(f"mentor {mentor['Email']}, {mentor['title']}")
+        logging.info(f"mentee {mentee['Email']}")
+        if len(mentee) > 0 and len(mentor) > 0:
+            matches_df.at[i, 'mentee_manager'] = mentee['manager'].iloc[0]
+            matches_df.at[i, 'mentee_skip_manager'] = mentee['skip_manager'].iloc[0]
+            matches_df.at[i, 'mentee_timezone'] = mentee['time_zone'].iloc[0]
+            matches_df.at[i, 'mentee_title'] = mentee['title'].iloc[0]
+            matches_df.at[i, 'mentor_manager'] = mentor['manager'].iloc[0]
+            matches_df.at[i, 'mentor_skip_manager'] = mentor['skip_manager'].iloc[0]
+            matches_df.at[i, 'mentor_timezone'] = mentor['time_zone'].iloc[0]
+            matches_df.at[i, 'mentor_title'] = mentor['title'].iloc[0]
+            logging.info(f"Adding mentor and mentee input data information")
+
+    return matches_df
+
 # get list of unmatched mentees that have not been matched from the dataframe
 def update_unmatched_mentees(mentees_df, matches):
     unmatched_mentees_df = mentees_df
@@ -216,7 +242,7 @@ if __name__ == '__main__':
     
     total_processed = int(0)
     total_mentees_matched = int(0)
-    result_df = pd.DataFrame(columns=['mentor','mentee','reason_for','reason_against','alignment_score','over_capacity'])
+    result_df = pd.DataFrame(columns=['mentor','mentee','reason_for','reason_against','alignment_score','over_capacity', 'mentor_title', 'mentee_title', 'mentor_manager', 'mentee_manager', 'mentor_timezone', 'mentee_timezone'])
     while total_processed < len(inputdata):
         # Calculate batch size, driven by the mentors capacity (assuming we'll always have less mentors)
         is_last_batch = len(inputdata) - total_processed <= BATCH_SIZE
@@ -233,7 +259,8 @@ if __name__ == '__main__':
         # Send to gpt model 
         matches = match_with_gpt(batch.to_json())
         matches_df = pd.read_json(StringIO(matches))
-        
+        matches_df = update_inputdata(matches_df, inputdata)
+                
         if not is_last_batch:
             # valid_matches = matches_df[(matches_df['alignment_score'] != '') & (matches_df['alignment_score'] > 6)]
             valid_matches = matches_df[(matches_df['alignment_score'] != '') & (matches_df['alignment_score'] > 0)]
